@@ -1,0 +1,160 @@
+using JsonNet.ContractResolvers;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading.Tasks;
+using System.Web;
+
+namespace Tasks.API.IntegrationTests.Common.Utils
+{
+    public class Request
+    {
+                public readonly HttpClient Client;
+
+        public Request(HttpClient client) => Client = client;
+
+        public async Task<HttpResponseMessage> GetAsync(Uri uri, dynamic query = null)
+        {
+            var request = new HttpRequestMessage
+            {
+                RequestUri = new Uri($"{uri}?{GetUrlString(query)}"),
+                Method = HttpMethod.Get
+            };
+
+            return await Client.SendAsync(request);
+        }
+
+        public async Task<(HttpResponseMessage response, TResult result)> GetAsync<TResult>(Uri uri, dynamic query = null)
+        {
+            var request = new HttpRequestMessage
+            {
+                RequestUri = new Uri($"{uri}?{GetUrlString(query)}"),
+                Method = HttpMethod.Get
+            };
+
+            var response = await Client.SendAsync(request);
+            return await GetResultAsync<TResult>(response);
+        }
+
+        public async Task<HttpResponseMessage> PostAsync(Uri uri, dynamic data, dynamic query = null)
+        {
+            var content = new StringContent(JsonConvert.SerializeObject(data), Encoding.Default, "application/json");
+            return await Client.PostAsync(new Uri($"{uri}?{GetUrlString(query)}"), content);
+        }
+
+        public async Task<(HttpResponseMessage response, TResult result)> PostAsync<TResult>(Uri uri, dynamic data, dynamic query = null)
+        {
+            var content = new StringContent(JsonConvert.SerializeObject(data), Encoding.Default, "application/json");
+
+            var response = await Client.PostAsync(new Uri($"{uri}?{GetUrlString(query)}"), content);
+            return await GetResultAsync<TResult>(response);
+        }
+
+        public async Task<HttpResponseMessage> PutAsync(Uri uri, dynamic data, dynamic query = null)
+        {
+            var content = new StringContent(JsonConvert.SerializeObject(data), Encoding.Default, "application/json");
+            return await Client.PutAsync(new Uri($"{uri}?{GetUrlString(query)}"), content);
+        }
+
+        public async Task<(HttpResponseMessage response, TResult result)> PutAsync<TResult>(Uri uri, dynamic data, dynamic query = null)
+        {
+            var content = new StringContent(JsonConvert.SerializeObject(data), Encoding.Default, "application/json");
+
+            var response = await Client.PutAsync(new Uri($"{uri}?{GetUrlString(query)}"), content);
+            return await GetResultAsync<TResult>(response);
+        }
+
+        public async Task<HttpResponseMessage> PatchAsync(Uri uri, dynamic data = null, dynamic query = null)
+        {
+            var content = new StringContent(JsonConvert.SerializeObject(data), Encoding.Default, "application/json");
+
+            return await Client.PatchAsync(new Uri($"{uri}?{GetUrlString(query)}"), content);
+        }
+
+        public async Task<(HttpResponseMessage response, TResult result)> PatchAsync<TResult>(Uri uri, dynamic data = null, dynamic query = null)
+        {
+            var content = new StringContent(JsonConvert.SerializeObject(data), Encoding.Default, "application/json");
+
+            var response = await Client.PatchAsync(new Uri($"{uri}?{GetUrlString(query)}"), content);
+            return await GetResultAsync<TResult>(response);
+        }
+
+        public async Task<HttpResponseMessage> DeleteAsync(Uri uri, dynamic query = null)
+        {
+            return await Client.DeleteAsync(new Uri($"{uri}?{GetUrlString(query)}"));
+        }
+
+        public async Task<(HttpResponseMessage response, TResult result)> DeleteAsync<TResult>(Uri uri, dynamic query = null)
+        {
+            var response = await Client.DeleteAsync(new Uri($"{uri}?{GetUrlString(query)}"));
+            return await GetResultAsync<TResult>(response);
+        }
+
+        public async Task<(HttpResponseMessage response, FileInfo file)> DownloadFile(Uri uri, dynamic query = null)
+        {
+            var request = new HttpRequestMessage
+            {
+                RequestUri = new Uri($"{uri}?{GetUrlString(query)}"),
+                Method = HttpMethod.Get
+            };
+
+            var response = await Client.SendAsync(request);
+            try
+            {
+                if (response.StatusCode != HttpStatusCode.OK) return (response, null);
+                var fileName = $"{Guid.NewGuid()}{Path.GetExtension(response.Content.Headers.ContentDisposition?.FileNameStar)}";
+                var filePath = Path.Combine(Path.GetTempPath(), fileName);
+                using var contentStream = await response.Content.ReadAsStreamAsync();
+                using var fileStream = new FileStream(filePath, FileMode.Create);
+                await contentStream.CopyToAsync(fileStream);
+
+                return (response, new FileInfo(filePath));
+            }
+            catch (Exception e)
+            {
+                throw new Exception($"Could not download file", e);
+            }
+        }
+
+        #region Private Methods
+
+        private async Task<(HttpResponseMessage response, TResult result)> GetResultAsync<TResult>(HttpResponseMessage response)
+        {
+            var json = await response.Content.ReadAsStringAsync();
+            try
+            {
+                var settings = new JsonSerializerSettings { ContractResolver = new PrivateSetterContractResolver() };
+                var result = JsonConvert.DeserializeObject<TResult>(json, settings);
+                return (response, result);
+            }
+            catch (Exception e)
+            {
+                throw new Exception($"Could not deserialize object. Current JSON: {json}", e);
+            }
+        }
+
+        private string GetUrlString(object data = null)
+        {
+            if (data == null) return string.Empty;
+
+            var parameters = new List<string>();
+            var properties = data.GetType().GetProperties();
+            foreach (var property in properties)
+            {
+                var value = property.GetValue(data);
+                if (value == null) continue;
+
+                var valueJson = JsonConvert.SerializeObject(value);
+                parameters.Add($"{HttpUtility.UrlEncode(property.Name)}={HttpUtility.UrlEncode(valueJson)}");
+            }
+
+            return string.Join("&", parameters);
+        }
+
+        #endregion
+    }
+}
